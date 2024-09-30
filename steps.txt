@@ -1,0 +1,9 @@
+1. Install CUDA from NVIDIA's website
+2. pip install --upgrade pip
+3. pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124 
+4. pip install ultralytics supervision roboflow
+5. Run dataset_init.py
+6. cd to the directory that holds the data.yaml of your database (I recommend also moving the football-players-detection-12 folder into an overarching folder called datasets)
+6. yolo task=detect mode=train model=yolov8s.pt data=data.yaml epochs=100 imgsz=1280
+7. Run the app.py
+8.

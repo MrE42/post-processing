@@ -3,8 +3,6 @@
   <component name="NewModuleRootManager">
     <content url="file://$MODULE_DIR$">
       <excludeFolder url="file://$MODULE_DIR$/venv" />
-      <excludeFolder url="file://$MODULE_DIR$/datasets/football-players-detection-12/runs/detect/train2/weights" />
-      <excludeFolder url="file://$MODULE_DIR$/datasets/football-players-detection-12/runs/detect/train3/weights" />
     </content>
     <orderEntry type="inheritedJdk" />
     <orderEntry type="sourceFolder" forTests="false" />

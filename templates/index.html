@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Eye Tracking with Webgazer.js</title>
+    <!-- Use the latest version of WebGazer.js -->
+    <script src="https://cdn.jsdelivr.net/npm/webgazer"></script>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        #video-container {
+            position: relative;
+            width: 80%;
+            max-width: 800px;
+        }
+
+        #video {
+            width: 100%;
+        }
+
+        #overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+
+        #start-button, #stop-button, #play-video-button {
+            margin: 10px;
+        }
+
+        #calibration-point {
+            position: absolute;
+            width: 20px;
+            height: 20px;
+            background-color: red;
+            border-radius: 50%;
+            display: none;
+            z-index: 2;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Eye Tracking with Webgazer.js</h1>
+
+    <button id="start-button">Start Calibration</button>
+    <button id="stop-button" style="display:none;">Stop Calibration</button>
+    <button id="play-video-button" style="display:none;">Start Video</button>
+
+    <div id="video-container">
+        <video id="video" controls>
+            <source src="static/soccer.mp4" type="video/mp4">
+            Your browser does not support the video tag.
+        </video>
+        <canvas id="overlay"></canvas>
+        <div id="calibration-point"></div>
+    </div>
+
+    <script>
+        let gazeData = [];
+        let videoElement = document.getElementById('video');
+        let overlay = document.getElementById('overlay');
+        let overlayContext = overlay.getContext('2d');
+
+        // Adjust canvas size to match video
+        function resizeCanvas() {
+            overlay.width = videoElement.clientWidth;
+            overlay.height = videoElement.clientHeight;
+        }
+
+        window.addEventListener('resize', resizeCanvas);
+        videoElement.addEventListener('loadedmetadata', resizeCanvas);
+
+        // Calibration variables
+        let isCalibrated = false;
+        let calibrationCount = 0;
+        const totalCalibrationPoints = 9;
+        let calibrationPoint = document.getElementById('calibration-point');
+        let calibrationSequence = [];
+
+        document.getElementById('start-button').addEventListener('click', startCalibration);
+        document.getElementById('stop-button').addEventListener('click', stopCalibration);
+        document.getElementById('play-video-button').addEventListener('click', playVideo);
+
+        function startCalibration() {
+            // Begin WebGazer after user interaction
+            webgazer.begin();
+            webgazer.setGazeListener(function(data, elapsedTime) {
+                if (data && isCalibrated && !videoElement.paused) {
+                    // Map gaze data to video coordinates
+                    let videoRect = videoElement.getBoundingClientRect();
+                    let x = data.x - videoRect.left;
+                    let y = data.y - videoRect.top;
+
+                    gazeData.push({
+                        x: x,
+                        y: y,
+                        timestamp: Date.now(),
+                        videoTime: videoElement.currentTime
+                    });
+
+                    console.log(`Gaze data length: ${gazeData.length}`);
+
+                    // Optionally draw gaze point on overlay
+                    overlayContext.clearRect(0, 0, overlay.width, overlay.height);
+                    overlayContext.beginPath();
+                    overlayContext.arc(
+                        x * (overlay.width / videoElement.clientWidth),
+                        y * (overlay.height / videoElement.clientHeight),
+                        5, 0, 2 * Math.PI
+                    );
+                    overlayContext.fillStyle = 'red';
+                    overlayContext.fill();
+                }
+            });
+
+            webgazer.showVideoPreview(true).showPredictionPoints(true);
+
+            document.getElementById('start-button').style.display = 'none';
+            document.getElementById('stop-button').style.display = 'inline';
+            calibrationCount = 0;
+            calibrationPoint.style.display = 'block';
+            calibrationSequence = generateCalibrationSequence();
+            moveCalibrationPoint();
+        }
+
+        function stopCalibration() {
+            // Do not end webgazer here
+            document.getElementById('stop-button').style.display = 'none';
+            document.getElementById('start-button').style.display = 'inline';
+            calibrationPoint.style.display = 'none';
+            isCalibrated = false;
+
+            // Hide webgazer video and prediction points
+            webgazer.showVideoPreview(false).showPredictionPoints(false);
+        }
+
+        function generateCalibrationSequence() {
+            // Generate a sequence of positions for calibration points
+            let positions = [];
+            let videoRect = videoElement.getBoundingClientRect();
+            let padding = 40; // Padding to avoid edges
+
+            let xPositions = [videoRect.left + padding, videoRect.left + videoRect.width / 2, videoRect.left + videoRect.width - padding];
+            let yPositions = [videoRect.top + padding, videoRect.top + videoRect.height / 2, videoRect.top + videoRect.height - padding];
+
+            for (let x of xPositions) {
+                for (let y of yPositions) {
+                    positions.push({ x: x, y: y });
+                }
+            }
+
+            // Shuffle the positions
+            positions.sort(() => Math.random() - 0.5);
+
+            return positions;
+        }
+
+        function moveCalibrationPoint() {
+            if (calibrationCount >= totalCalibrationPoints) {
+                calibrationPoint.style.display = 'none';
+                isCalibrated = true;
+                console.log('Calibration completed. isCalibrated set to true.');
+
+                // Hide the webgazer video and prediction points
+                webgazer.showVideoPreview(false).showPredictionPoints(false);
+
+                document.getElementById('stop-button').style.display = 'none';
+                document.getElementById('play-video-button').style.display = 'inline'; // Show the play video button
+                return;
+            }
+
+            // Position the calibration point
+            let position = calibrationSequence[calibrationCount];
+            let videoRect = videoElement.getBoundingClientRect();
+
+            calibrationPoint.style.left = (position.x - videoRect.left - 10) + 'px';
+            calibrationPoint.style.top = (position.y - videoRect.top - 10) + 'px';
+
+            // Wait for user to look at the point
+            setTimeout(() => {
+                calibrationCount++;
+                moveCalibrationPoint();
+            }, 1000);
+        }
+
+        function playVideo() {
+            videoElement.play();
+            document.getElementById('play-video-button').style.display = 'none';
+        }
+
+        // Pause the video initially
+        videoElement.pause();
+
+        // Send gaze data to Flask server when the video ends
+        videoElement.addEventListener('ended', () => {
+            console.log(`Sending ${gazeData.length} gaze points to the server.`);
+            console.log('Gaze Data:', gazeData);
+
+            fetch('/submit_gaze_data', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(gazeData)
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log('Gaze data successfully sent:', data);
+                alert('Metrics:\n' + JSON.stringify(data.metrics, null, 2));
+            })
+            .catch(error => {
+                console.error('Error sending gaze data:', error);
+            });
+        });
+    </script>
+
+</body>
+</html>
