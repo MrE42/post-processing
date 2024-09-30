@@ -1,3 +1,10 @@
+# Video Files and Data
+static/
+datasets/football-players-detection-12/valid/
+datasets/football-players-detection-12/runs/
+datasets/football-players-detection-12/test/
+datasets/football-players-detection-12/train/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
