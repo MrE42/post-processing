@@ -1,11 +1,11 @@
-from flask import Flask, request, jsonify, render_template, send_file
+from flask import Flask, request, jsonify, render_template
 import numpy as np
 import pandas as pd
 import os
 import logging
 import cv2
-import supervision as sv
 from ultralytics import YOLO
+import supervision as sv
 
 app = Flask(__name__)
 
@@ -28,9 +28,13 @@ def submit_gaze_data():
 
     # Paths for video and data
     original_video_path = "static/soccer.mp4"
-    detection_video_path = "static/result.mp4"  # Video generated during object detection
+    detection_video_path = "static/result.mp4"
     csv_path = "static/data.csv"
-    output_video_path = "static/visualization.mp4"  # New visualization video
+    output_video_path = "static/visualization.mp4"
+    unprocessed_gaze_csv_path = "static/unprocessed_gaze_data.csv"
+
+    # Save unprocessed gaze data to CSV
+    pd.DataFrame(gaze_data).to_csv(unprocessed_gaze_csv_path, index=False)
 
     # Check if the detection CSV exists; if not, run object detection
     if not os.path.exists(csv_path) or not os.path.exists(detection_video_path):
@@ -40,20 +44,15 @@ def submit_gaze_data():
         logging.info(f"Loading existing detection data and video.")
         detection_data = pd.read_csv(csv_path)
 
-        # Ensure numeric columns are correctly typed
-        numeric_columns = ['x_min', 'y_min', 'x_max', 'y_max']
-        detection_data[numeric_columns] = detection_data[numeric_columns].apply(pd.to_numeric, errors='coerce')
-
-        # Check for NaN values and handle them
-        if detection_data[numeric_columns].isnull().values.any():
-            logging.warning("NaN values found in numeric columns after conversion. Dropping rows with NaN values.")
-            detection_data = detection_data.dropna(subset=numeric_columns)
-
-    # Process gaze data
-    fixations, saccades, metrics = process_gaze_data(gaze_data, original_video_path)
+    # Process gaze data to classify fixations, saccades, and smooth pursuit
+    fixations, saccades, smooth_pursuits, metrics = process_gaze_data(gaze_data, original_video_path)
 
     # Generate visualization video using the detection video as the base
-    generate_visualization(fixations, saccades, detection_data, detection_video_path, output_video_path)
+    generate_visualization(fixations, saccades, smooth_pursuits, detection_data, detection_video_path, output_video_path)
+
+    # Save processed gaze data to CSV
+    processed_data = fixations + saccades + smooth_pursuits
+    pd.DataFrame(processed_data).to_csv("static/processed_gaze_data.csv", index=False)
 
     # Return the metrics as JSON
     return jsonify({"status": "success", "metrics": metrics, "video_url": output_video_path})
@@ -140,35 +139,45 @@ def process_gaze_data(gaze_data, video_path):
     y = np.array([point['y'] for point in gaze_data])
     t = np.array([point['timestamp'] for point in gaze_data])
 
-    # Correct artifacts if necessary (e.g., out-of-bounds values)
+    # Correct artifacts if necessary
     x, y = correct_artifacts(x, y, video_path)
 
     # Smooth the data using a moving average filter
-    window_size = 5  # Adjust window size as needed
+    window_size = 5
     x_smooth = running_mean(x, window_size)
     y_smooth = running_mean(y, window_size)
 
-    # Compute velocities using the I-VT algorithm
+    # Compute velocities
     velocities = cartesian_velocity(x_smooth, y_smooth, t)
 
-    # Identify fixations and saccades based on velocity threshold
-    VELOCITY_THRESHOLD = 100  # Adjust based on data (pixels per second)
-    indices_saccades = np.where(velocities > VELOCITY_THRESHOLD)[0]
-    indices_fixations = np.where(velocities <= VELOCITY_THRESHOLD)[0]
+    # Define thresholds for fixation, saccade, and smooth pursuit
+    VELOCITY_THRESHOLD_FIXATION = 30
+    VELOCITY_THRESHOLD_SACCADE = 150
 
-    # Extract fixation and saccade data
-    fixations = [gaze_data[i] for i in indices_fixations]
-    saccades = [gaze_data[i] for i in indices_saccades]
+    fixations = []
+    saccades = []
+    smooth_pursuits = []
+
+    for i in range(len(velocities)):
+        gaze_point = gaze_data[i]
+        if velocities[i] < VELOCITY_THRESHOLD_FIXATION:
+            fixations.append(gaze_point)
+        elif velocities[i] > VELOCITY_THRESHOLD_SACCADE:
+            saccades.append(gaze_point)
+        else:
+            smooth_pursuits.append(gaze_point)
 
     # Calculate metrics
     metrics = {
         'num_fixations': len(fixations),
         'num_saccades': len(saccades),
+        'num_smooth_pursuits': len(smooth_pursuits),
         'average_fixation_duration': calculate_average_duration(fixations),
-        'average_saccade_duration': calculate_average_duration(saccades)
+        'average_saccade_duration': calculate_average_duration(saccades),
+        'average_smooth_pursuit_duration': calculate_average_duration(smooth_pursuits)
     }
 
-    return fixations, saccades, metrics
+    return fixations, saccades, smooth_pursuits, metrics
 
 def correct_artifacts(x, y, video_path):
     # Get video dimensions
@@ -210,103 +219,52 @@ def cartesian_velocity(x, y, t):
 def calculate_average_duration(events):
     if not events:
         return 0
-    durations = [events[i]['timestamp'] - events[i-1]['timestamp'] for i in range(1, len(events))]
+    durations = [events[i]['timestamp'] - events[i - 1]['timestamp'] for i in range(1, len(events))]
     average_duration = np.mean(durations) if durations else 0
     return average_duration
 
-def generate_visualization(fixations, saccades, detection_data, base_video_path, output_video_path):
-    # Open video capture and get properties
+def generate_visualization(fixations, saccades, smooth_pursuits, detection_data, base_video_path, output_video_path):
     cap = cv2.VideoCapture(base_video_path)
     fps = cap.get(cv2.CAP_PROP_FPS)
-    video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-    # Create VideoWriter to save the output video
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(output_video_path, fourcc, fps, (video_width, video_height))
-
-    # Group gaze data by frame
-    fixations_df = pd.DataFrame(fixations)
-    saccades_df = pd.DataFrame(saccades)
-
-    fixations_df['frame_index'] = (fixations_df['videoTime'] * fps).astype(int)
-    saccades_df['frame_index'] = (saccades_df['videoTime'] * fps).astype(int)
-
-    fixation_groups = fixations_df.groupby('frame_index')
-    saccade_groups = saccades_df.groupby('frame_index')
-
-    # Convert detection data to a dict for faster access
-    detection_dict = detection_data.groupby('frame_index')
+    out = cv2.VideoWriter(output_video_path, fourcc, fps, (frame_width, frame_height))
 
     frame_index = 0
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-
-    logging.info(f"Generating visualization video: {output_video_path}")
-
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
 
-        # Draw fixations on the frame
-        if frame_index in fixation_groups.groups:
-            fixation_points = fixation_groups.get_group(frame_index)
-            for _, point in fixation_points.iterrows():
-                x = int(point['x'])
-                y = int(point['y'])
-                cv2.circle(frame, (x, y), 5, (0, 255, 0), -1)  # Green circles for fixations
+        # Draw fixations as green circles
+        for fixation in fixations:
+            if int(fixation['videoTime'] * fps) == frame_index:
+                x = int(fixation['x'])
+                y = int(fixation['y'])
+                cv2.circle(frame, (x, y), 5, (0, 255, 0), -1)
 
-        # Draw saccades on the frame
-        if frame_index in saccade_groups.groups:
-            saccade_points = saccade_groups.get_group(frame_index)
-            saccade_points = saccade_points.sort_values('timestamp')  # Ensure correct order
-            for idx in range(len(saccade_points) - 1):
-                x1 = int(saccade_points.iloc[idx]['x'])
-                y1 = int(saccade_points.iloc[idx]['y'])
-                x2 = int(saccade_points.iloc[idx+1]['x'])
-                y2 = int(saccade_points.iloc[idx+1]['y'])
-                cv2.line(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)  # Red lines for saccades
+        # Draw saccades as red lines
+        for i in range(1, len(saccades)):
+            if int(saccades[i]['videoTime'] * fps) == frame_index:
+                x1, y1 = int(saccades[i - 1]['x']), int(saccades[i - 1]['y'])
+                x2, y2 = int(saccades[i]['x']), int(saccades[i]['y'])
+                cv2.line(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
 
-        # Determine the object being observed
-        observed_object = None
-        if frame_index in fixation_groups.groups:
-            fixation_points = fixation_groups.get_group(frame_index)
-            frame_detections = detection_dict.get_group(frame_index) if frame_index in detection_dict.groups else None
-            if frame_detections is not None:
-                for _, fixation_point in fixation_points.iterrows():
-                    for _, detection in frame_detections.iterrows():
-                        if is_point_inside_bbox(fixation_point['x'], fixation_point['y'], detection):
-                            observed_object = detection['class_name']
-                            break
-                    if observed_object:
-                        break
+        # Draw smooth pursuits as blue lines
+        for i in range(1, len(smooth_pursuits)):
+            if int(smooth_pursuits[i]['videoTime'] * fps) == frame_index:
+                x1, y1 = int(smooth_pursuits[i - 1]['x']), int(smooth_pursuits[i - 1]['y'])
+                x2, y2 = int(smooth_pursuits[i]['x']), int(smooth_pursuits[i]['y'])
+                cv2.line(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
 
-        # Display the observed object on the frame
-        if observed_object:
-            cv2.putText(frame, f"Observing: {observed_object}", (50, 50),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA)
-
-        # Write the frame to the output video
         out.write(frame)
-
         frame_index += 1
 
     cap.release()
     out.release()
     logging.info("Visualization video generated successfully.")
 
-def is_point_inside_bbox(x, y, bbox):
-    # Ensure coordinates are floats
-    x = float(x)
-    y = float(y)
-    x_min = float(bbox['x_min'])
-    y_min = float(bbox['y_min'])
-    x_max = float(bbox['x_max'])
-    y_max = float(bbox['y_max'])
-
-    return x_min <= x <= x_max and y_min <= y <= y_max
-
 if __name__ == "__main__":
     app.run(debug=True)
-
-
