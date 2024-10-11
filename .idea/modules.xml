@@ -2,6 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
+      <module fileurl="file://$PROJECT_DIR$/deep_em/.idea/deep_em.iml" filepath="$PROJECT_DIR$/deep_em/.idea/deep_em.iml" />
       <module fileurl="file://$PROJECT_DIR$/.idea/post-processing.iml" filepath="$PROJECT_DIR$/.idea/post-processing.iml" />
     </modules>
   </component>
