@@ -7,7 +7,7 @@ import cv2
 from ultralytics import YOLO
 import supervision as sv
 import subprocess
-import tempfile
+
 
 testing = True
 
@@ -22,7 +22,7 @@ MODEL_PATH = "datasets/football-players-detection-12/yolov8n.pt"
 
 original_video_path = "static/soccer.mp4"
 detection_video_path = "static/result.mp4"
-csv_path = "static/data.csv"
+object_csv_path = "static/data.csv"
 output_video_path = "static/visualization.mp4"
 unprocessed_gaze_csv_path = "C:/Users/catta/PycharmProjects/post-processing/deep_em/unprocessed_gaze_data.csv"
 processed_gaze_csv_path = "C:/Users/catta/PycharmProjects/post-processing/deep_em/unprocessed_gaze_data.csv"
@@ -129,28 +129,10 @@ def process_gaze_data(data_in, data_out):
 
     env = os.environ.copy()
 
-    # If you need to include any specific paths for venv2's libraries or binaries, add them here
-    # env["PATH"] = "C:\\Users\\catta\\PycharmProjects\\post-processing\\deep_em"
-
-    # Run the gazeprocess.py using the venv2 interpreter
-    #result = subprocess.run(
-    #    ["deep_em\\venv\\Scripts\\python.exe", 'deep_em\\gazeprocess.py', data_in, data_out],
-    #     env=env
-    #)
-
-
     os.chdir('C:\\Users\\catta\\PycharmProjects\\post-processing\\deep_em')
-    result = subprocess.run(['venv\\Scripts\\python.exe','gazeprocess.py', data_in, data_out],
+    subprocess.run(['venv\\Scripts\\python.exe','gazeprocess.py', data_in, data_out],
                              shell=True, env=env)
     os.chdir('C:\\Users\\catta\\PycharmProjects\\post-processing')
-
-    # Check if the subprocess ran successfully
-    if result.returncode != 0:
-        logging.error(f"Subprocess failed with error: {result.stderr}")
-        raise RuntimeError(f"Subprocess failed: {result.stderr}")
-
-    logging.info(f"Subprocess succeeded with output: {result.stdout}")
-
 
     gazed = pd.read_csv(data_out)
 
@@ -286,12 +268,12 @@ def main():
     # pd.DataFrame(gaze_data).to_csv(unprocessed_gaze_csv_path, index=False)
     logging.info("Beginning with gaze CSV")
     # Check if the detection CSV exists; if not, run object detection
-    if not os.path.exists(csv_path) or not os.path.exists(detection_video_path):
+    if not os.path.exists(object_csv_path) or not os.path.exists(detection_video_path):
         logging.info(f"Detection data or video not found. Running object detection.")
-        detection_data = run_object_detection(original_video_path, csv_path, detection_video_path)
+        detection_data = run_object_detection(original_video_path, object_csv_path, detection_video_path)
     else:
         logging.info(f"Loading existing detection data and video.")
-        detection_data = pd.read_csv(csv_path)
+        detection_data = pd.read_csv(object_csv_path)
 
     # Process gaze data to classify fixations, saccades, and smooth pursuit
     fixations, saccades, smooth_pursuits, other, metrics = process_gaze_data(unprocessed_gaze_csv_path,
