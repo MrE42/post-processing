@@ -8,9 +8,8 @@ from ultralytics import YOLO
 import supervision as sv
 import subprocess
 
-
+gaze = True
 testing = True
-
 
 app = Flask(__name__)
 
@@ -20,12 +19,15 @@ logging.basicConfig(level=logging.INFO)
 # Load the pre-trained YOLO model
 MODEL_PATH = "datasets/football-players-detection-12/yolov8n.pt"
 
+
+# project_path = os.path.expanduser('~')
+
 original_video_path = "static/soccer.mp4"
 detection_video_path = "static/result.mp4"
 object_csv_path = "static/data.csv"
 output_video_path = "static/visualization.mp4"
 unprocessed_gaze_csv_path = "C:/Users/catta/PycharmProjects/post-processing/deep_em/unprocessed_gaze_data.csv"
-processed_gaze_csv_path = "C:/Users/catta/PycharmProjects/post-processing/deep_em/unprocessed_gaze_data.csv"
+processed_gaze_csv_path = "C:/Users/catta/PycharmProjects/post-processing/deep_em/processed_gaze_data.csv"
 
 # Route to serve the main HTML page
 @app.route('/')
@@ -46,6 +48,7 @@ def submit_gaze_data():
 def run_object_detection(video_path: str, csv_output_path: str, output_video_path: str):
     # Initialize lists to store detection data
     detection_records = []
+    d2 = []
 
     # Open video capture
     cap = cv2.VideoCapture(video_path)
@@ -121,18 +124,19 @@ def run_object_detection(video_path: str, csv_output_path: str, output_video_pat
 
 
 
-def process_gaze_data(data_in, data_out):
+def process_gaze_data(data_in, data_out, process):
     fixations = []
     saccades = []
     smooth_pursuits = []
     other = []
 
-    env = os.environ.copy()
+    if process:
+        env = os.environ.copy()
 
-    os.chdir('C:\\Users\\catta\\PycharmProjects\\post-processing\\deep_em')
-    subprocess.run(['venv\\Scripts\\python.exe','gazeprocess.py', data_in, data_out],
-                             shell=True, env=env)
-    os.chdir('C:\\Users\\catta\\PycharmProjects\\post-processing')
+        os.chdir('C:\\Users\\catta\\PycharmProjects\\post-processing\\deep_em')
+        subprocess.run(['venv\\Scripts\\python.exe','gazeprocess.py', data_in, data_out, '1'],
+                                 shell=True, env=env)
+        os.chdir('C:\\Users\\catta\\PycharmProjects\\post-processing')
 
     gazed = pd.read_csv(data_out)
 
@@ -208,6 +212,22 @@ def calculate_average_duration(events):
     average_duration = np.mean(durations) if durations else 0
     return average_duration
 
+def list_adjust(total, buffer, fps, frame_index):
+    past = 0
+    current = []
+    for t in total:
+        if (t['videoTime'] + buffer) * fps >= frame_index:
+            if (t['videoTime'] - buffer) * fps <= frame_index:
+                current.append(t)
+            else:
+                break
+        else:
+            past += 1
+
+    while past > 1:
+        total.pop(0)
+        past -= 1
+    return total, current
 
 def generate_visualization(fixations, saccades, smooth_pursuits, other, detection_data, base_video_path, output_video_path):
     logging.info("Generating visualization video...")
@@ -220,39 +240,123 @@ def generate_visualization(fixations, saccades, smooth_pursuits, other, detectio
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(output_video_path, fourcc, fps, (frame_width, frame_height))
 
+    total = fixations + saccades + smooth_pursuits + other
+    total.sort(key=lambda x:x['videoTime'])
+
     frame_index = 0
+    annotator = sv.BoxCornerAnnotator()
+    annotator.color = sv.Color(r=0, g=0, b=255)
+    annotator.thickness = 4
+
+    annotator2 = sv.CircleAnnotator()
+    annotator2.color = sv.Color(r=255, g=0, b=0)
+    annotator2.thickness = 6
+
+
+    if len(total) >= 3:
+        gps=float(1/float(total[2]['videoTime']-total[1]['videoTime']))
+    else:
+        gps=30
+
+    fpg = float(fps/gps) #frames per gaze (around 2 usually)
+
+    buffer = fpg/gps
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
 
+        # Filter detections for the current frame
+        current_detections = detection_data[detection_data['frame_index'] == frame_index]
+
+        if not current_detections.empty:
+            v = False
+            detections_list = []
+            viewing_list = []
+
+            total, current = list_adjust(total, buffer, fps, frame_index)
+
+            for _, detection in current_detections.iterrows():
+                x_min, y_min, x_max, y_max = int(detection['x_min']), int(detection['y_min']), int(detection['x_max']), int(detection['y_max'])
+                class_id = detection['class_id']
+                confidence = detection['confidence']
+                tracker_id = detection['tracker_id']
+
+                detection_entry = {
+                    'xyxy': [x_min, y_min, x_max, y_max],
+                    'class_id': class_id,
+                    'confidence': confidence,
+                    'tracker_id': tracker_id
+                }
+
+                #For precision
+                b = 5
+
+                for c in current:
+                    if x_min-b <= c['x'] <= x_max+b and y_min-b <= c['y'] <= y_max+b:
+                        viewing_list.append(detection_entry)
+                        v = True
+                        break
+                        
+                if not v:
+                    detections_list.append(detection_entry)
+
+            if not detections_list == []:
+                # Create sv.Detections object
+                detections = sv.Detections(
+                    xyxy=np.array([d['xyxy'] for d in detections_list]),
+                    class_id=np.array([d['class_id'] for d in detections_list]),
+                    confidence=np.array([d['confidence'] for d in detections_list]),
+                    tracker_id=np.array([d['tracker_id'] for d in detections_list])
+                )
+
+                # Annotate the frame with the detections
+                frame = annotator.annotate(scene=frame, detections=detections)
+
+            if not viewing_list == []:
+                detections2 = sv.Detections(
+                    xyxy=np.array([d['xyxy'] for d in viewing_list]),
+                    class_id=np.array([d['class_id'] for d in viewing_list]),
+                    confidence=np.array([d['confidence'] for d in viewing_list]),
+                    tracker_id=np.array([d['tracker_id'] for d in viewing_list])
+                )
+                frame = annotator2.annotate(scene=frame, detections=detections2)
+
+
         # Draw fixations as green circles
-        for fixation in fixations:
-            if int(fixation['videoTime'] * fps) == frame_index:
-                x = int(fixation['x'])
-                y = int(fixation['y'])
-                cv2.circle(frame, (x, y), 10, (0, 255, 0), -1)
+        fixations, current_f = list_adjust(fixations, buffer, fps, frame_index)
+        if not current_f == []:
+            fixation = current_f[int((len(current_f) - 1)/2)]
+            x = int(fixation['x'])
+            y = int(fixation['y'])
+            cv2.circle(frame, (x, y), 10, (0, 255, 0), -1)
 
         # Draw saccades as red lines
-        for i in range(1, len(saccades)):
-            if int(saccades[i]['videoTime'] * fps) == frame_index:
-                x1, y1 = int(saccades[i - 1]['x']), int(saccades[i - 1]['y'])
-                x2, y2 = int(saccades[i]['x']), int(saccades[i]['y'])
-                cv2.line(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
+        saccades, current_s = list_adjust(saccades, buffer * 2, fps, frame_index)
+        if len(current_s) >= 2:
+            m1 = int((len(current_s))/2)-1
+            m2 = int((len(current_s))/2)
+            x1, y1 = int(current_s[m1]['x']), int(current_s[m1]['y'])
+            x2, y2 = int(current_s[m2]['x']), int(current_s[m2]['y'])
+            cv2.line(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
 
         # Draw smooth pursuits as blue lines
-        for i in range(1, len(smooth_pursuits)):
-            if int(smooth_pursuits[i]['videoTime'] * fps) == frame_index:
-                x1, y1 = int(smooth_pursuits[i - 1]['x']), int(smooth_pursuits[i - 1]['y'])
-                x2, y2 = int(smooth_pursuits[i]['x']), int(smooth_pursuits[i]['y'])
-                cv2.line(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
+        smooth_pursuits, current_p = list_adjust(smooth_pursuits, buffer * 2, fps, frame_index)
+        if len(current_p) >= 2:
+            m1 = int((len(current_p)) / 2) - 1
+            m2 = int((len(current_p)) / 2)
+            x1, y1 = int(current_p[m1]['x']), int(current_p[m1]['y'])
+            x2, y2 = int(current_p[m2]['x']), int(current_p[m2]['y'])
+            cv2.line(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
 
-        # Draw fixations as green circles
-        for o in other:
-            if int(o['videoTime'] * fps) == frame_index:
+        if current_f == [] and current_s == [] and current_p == []:
+            # Draw fixations from 'other' as black circles
+            other, current_o = list_adjust(other, buffer, fps, frame_index)
+            if not current_o == []:
+                o = current_o[int((len(current_f) - 1) / 2)]
                 x = int(o['x'])
                 y = int(o['y'])
-                cv2.circle(frame, (x, y), 10, (0, 255, 0), -1)
+                cv2.circle(frame, (x, y), 10, (255, 255, 255), 2)
 
         out.write(frame)
         frame_index += 1
@@ -260,6 +364,7 @@ def generate_visualization(fixations, saccades, smooth_pursuits, other, detectio
     cap.release()
     out.release()
     logging.info("Visualization video generated successfully.")
+
 
 
 def main():
@@ -277,14 +382,15 @@ def main():
 
     # Process gaze data to classify fixations, saccades, and smooth pursuit
     fixations, saccades, smooth_pursuits, other, metrics = process_gaze_data(unprocessed_gaze_csv_path,
-                                                                             processed_gaze_csv_path)
+                                                                             processed_gaze_csv_path, gaze)
 
     # Generate visualization video using the detection video as the base
-    generate_visualization(fixations, saccades, smooth_pursuits, other, detection_data, detection_video_path,
+    generate_visualization(fixations, saccades, smooth_pursuits, other, detection_data, original_video_path,
                            output_video_path)
 
     # Return the metrics as JSON
-    return jsonify({"status": "success", "metrics": metrics, "video_url": output_video_path})
+    if not testing:
+        return jsonify({"status": "success", "metrics": metrics, "video_url": output_video_path})
 
 if __name__ == "__main__":
     if not testing:
