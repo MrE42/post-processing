@@ -8,6 +8,8 @@ from ultralytics import YOLO
 import supervision as sv
 import subprocess
 
+from deep_em import gazeprocess
+
 gaze = True
 testing = True
 
@@ -17,17 +19,21 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
 # Load the pre-trained YOLO model
-MODEL_PATH = "datasets/football-players-detection-12/yolov8n.pt"
+MODEL_PATH = "datasets/football-players-detection-12/yolo11n.pt"
 
 
 # project_path = os.path.expanduser('~')
+current_path = os.getcwd()
+
+current_directory = current_path.replace('\\', '/')+"/"
+
 
 original_video_path = "static/soccer.mp4"
 detection_video_path = "static/result.mp4"
 object_csv_path = "static/data.csv"
 output_video_path = "static/visualization.mp4"
-unprocessed_gaze_csv_path = "C:/Users/catta/PycharmProjects/post-processing/deep_em/unprocessed_gaze_data.csv"
-processed_gaze_csv_path = "C:/Users/catta/PycharmProjects/post-processing/deep_em/processed_gaze_data.csv"
+unprocessed_gaze_csv_path = current_directory+"deep_em/unprocessed_gaze_data.csv"
+processed_gaze_csv_path = current_directory+"deep_em/processed_gaze_data.csv"
 
 # Route to serve the main HTML page
 @app.route('/')
@@ -130,13 +136,18 @@ def process_gaze_data(data_in, data_out, process):
     smooth_pursuits = []
     other = []
 
+
+    '''
     if process:
         env = os.environ.copy()
 
-        os.chdir('C:\\Users\\catta\\PycharmProjects\\post-processing\\deep_em')
-        subprocess.run(['venv\\Scripts\\python.exe','gazeprocess.py', data_in, data_out, '1'],
+        os.chdir(current_path+'\\deep_em')
+        subprocess.run([current_path+'\\venv\\Scripts\\python.exe','gazeprocess.py', data_in, data_out, '1'],
                                  shell=True, env=env)
-        os.chdir('C:\\Users\\catta\\PycharmProjects\\post-processing')
+        os.chdir(current_path)
+    '''
+
+    gazeprocess.main(data_in, data_out, '1', current_path)
 
     gazed = pd.read_csv(data_out)
 
