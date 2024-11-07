@@ -1,0 +1,12 @@
+numpy==2.0.2
+Flask==3.0.3
+jellyfish==1.1.0
+opencv_python==4.10.0.84
+opencv_python_headless==4.10.0.84
+pandas==2.2.3
+roboflow==1.1.45
+scikit_learn==1.5.2
+supervision==0.24.0
+tf_keras==2.18.0
+ultralytics==8.3.27
+tensorflow==2.18.0
